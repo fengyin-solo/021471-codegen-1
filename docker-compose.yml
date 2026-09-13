@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  frontend-user:
+    build:
+      context: ./frontend-user
+      dockerfile: Dockerfile
+    container_name: billiard-frontend-user
+    ports:
+      - "8081:80"
+    restart: unless-stopped
+    networks:
+      - billiard-network
+
+networks:
+  billiard-network:
+    driver: bridge
