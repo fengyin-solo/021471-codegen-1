@@ -76,11 +76,27 @@ export default {
       return authState.user?.name || 'U'
     }
   },
+  mounted() {
+    // 钱包等操作检测到登录失效时的全局事件
+    window.addEventListener('billiard:auth-expired', this.handleAuthExpired)
+    // 业务页面请求弹出登录框（如登录失效后重新登录）
+    window.addEventListener('billiard:open-login', this.openLogin)
+  },
+  beforeUnmount() {
+    window.removeEventListener('billiard:auth-expired', this.handleAuthExpired)
+    window.removeEventListener('billiard:open-login', this.openLogin)
+  },
   methods: {
     /**
      * 打开登录弹窗
      */
     openLogin() {
+      this.showLoginModal = true
+    },
+    /**
+     * 登录失效：弹出登录框，不改动任何金额与任务状态
+     */
+    handleAuthExpired() {
       this.showLoginModal = true
     },
     /**

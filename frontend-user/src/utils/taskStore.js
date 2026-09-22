@@ -16,7 +16,7 @@ const taskTypeConfig = {
     icon: '🎱',
     actions: {
       pending_payment: [
-        { key: 'pay', label: '继续付款', type: 'primary', route: '/tables' },
+        { key: 'pay', label: '继续付款', type: 'primary' },
         { key: 'cancel', label: '取消', type: 'danger' }
       ],
       upcoming: [
@@ -37,7 +37,7 @@ const taskTypeConfig = {
     icon: '📚',
     actions: {
       pending_payment: [
-        { key: 'pay', label: '继续付款', type: 'primary', route: '/courses' },
+        { key: 'pay', label: '继续付款', type: 'primary' },
         { key: 'cancel', label: '取消', type: 'danger' }
       ],
       upcoming: [
@@ -57,7 +57,7 @@ const taskTypeConfig = {
     icon: '🏆',
     actions: {
       pending_payment: [
-        { key: 'pay', label: '继续付款', type: 'primary', route: '/competitions' },
+        { key: 'pay', label: '继续付款', type: 'primary' },
         { key: 'cancel', label: '取消', type: 'danger' }
       ],
       upcoming: [
@@ -76,7 +76,7 @@ const taskTypeConfig = {
     icon: '🛒',
     actions: {
       pending_payment: [
-        { key: 'pay', label: '继续付款', type: 'primary', route: '/shop' },
+        { key: 'pay', label: '继续付款', type: 'primary' },
         { key: 'cancel', label: '取消', type: 'danger' }
       ],
       pending_shipment: [
@@ -109,7 +109,14 @@ const statusConfig = {
 function loadTasks() {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    return stored ? JSON.parse(stored) : getDefaultTasks()
+    if (stored) {
+      return JSON.parse(stored)
+    }
+    // 首次访问：落盘默认任务，保证任务 ID 在后续页面访问中保持稳定
+    // （钱包消费明细通过任务 ID 关联，ID 漂移会导致对账误判）
+    const defaults = getDefaultTasks()
+    saveTasks(defaults)
+    return defaults
   } catch (e) {
     logger.error('加载任务失败', e)
     return getDefaultTasks()

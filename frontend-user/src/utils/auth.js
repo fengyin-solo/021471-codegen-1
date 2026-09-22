@@ -85,7 +85,7 @@ export function initAuth() {
     } catch (e) {
       // JSON解析失败，清除无效数据
       logger.error('Failed to parse stored user data', e)
-      clearAuth()
+      clearAuth(true)
     }
   }
 }
@@ -162,7 +162,8 @@ export async function logout() {
     // 即使API调用失败，也要清除本地状态
     logger.warn('Logout API failed', e)
   } finally {
-    clearAuth()
+    // 主动退出：静默清理，不触发登录失效提示
+    clearAuth(true)
   }
 }
 
@@ -182,9 +183,9 @@ export function isAuthenticated() {
 
 /**
  * 获取当前登录用户
- * 
+ *
  * @returns {Object|null} 用户信息，未登录返回null
- * 
+ *
  * 使用示例：
  * const user = getCurrentUser()
  * if (user) {
@@ -195,26 +196,69 @@ export function getCurrentUser() {
   return authState.user
 }
 
+/**
+ * 局部更新当前登录用户信息（如积分变动）
+ *
+ * 同步更新内存状态与 localStorage，保证返回个人中心时
+ * 金额、积分等资产数据与最近一次操作一致。
+ *
+ * @param {Object} updates - 需要合并的用户字段
+ * @returns {Object|null} 更新后的用户对象，未登录返回 null
+ */
+export function updateUser(updates) {
+  if (!authState.user || !authState.isLoggedIn) {
+    logger.warn('updateUser skipped: not logged in')
+    return null
+  }
+  Object.assign(authState.user, updates)
+  try {
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authState.user))
+  } catch (e) {
+    logger.error('Failed to persist user update', e)
+  }
+  return authState.user
+}
+
 // ==================== 私有方法 ====================
 
 /**
  * 清除认证状态
  * 重置所有状态并清除localStorage
- * 
+ *
  * @private
+ * @param {boolean} [silent=false] - 是否跳过登录失效事件广播（主动退出时使用）
  */
-function clearAuth() {
+function clearAuth(silent = false) {
   // 重置状态
   authState.isLoggedIn = false
   authState.user = null
   authState.token = null
   authState.error = null
-  
+
   // 清除存储
   localStorage.removeItem(AUTH_TOKEN_KEY)
   localStorage.removeItem(AUTH_USER_KEY)
-  
+
+  // 非主动退出（如其他页签清理了登录态）时广播登录失效事件
+  if (!silent) {
+    try {
+      window.dispatchEvent(new CustomEvent('billiard:auth-expired', { detail: { reason: 'session_cleared' } }))
+    } catch (e) {
+      /* CustomEvent 不可用时忽略 */
+    }
+  }
+
   logger.info('Auth state cleared')
+}
+
+// 跨页签同步登录失效：其他页签删除 token 时，本页也退出并广播
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === AUTH_TOKEN_KEY && !event.newValue && authState.isLoggedIn) {
+      logger.warn('Token removed in another tab, session expired')
+      clearAuth(false)
+    }
+  })
 }
 
 // ==================== 默认导出 ====================
@@ -225,5 +269,6 @@ export default {
   login,
   logout,
   isAuthenticated,
-  getCurrentUser
+  getCurrentUser,
+  updateUser
 }

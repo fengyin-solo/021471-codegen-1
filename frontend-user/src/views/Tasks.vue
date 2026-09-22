@@ -138,7 +138,8 @@
       title="确认付款"
       :subtitle="paySubtitle"
       size="small"
-      confirm-text="确认支付"
+      confirm-text="余额支付"
+      :confirm-disabled="payInsufficient"
       :loading="payLoading"
       @confirm="confirmPay"
     >
@@ -158,6 +159,16 @@
         <div class="pay-total">
           <span class="pay-label">应付金额</span>
           <span class="pay-amount">¥{{ selectedTask?.amount?.toLocaleString() }}</span>
+        </div>
+        <div class="pay-wallet">
+          <span class="pay-label">钱包余额</span>
+          <span class="wallet-balance" :class="{ insufficient: payInsufficient }">
+            ¥{{ walletState.balance.toLocaleString() }}
+          </span>
+        </div>
+        <div v-if="payInsufficient" class="pay-tip">
+          <span>余额不足，还差 ¥{{ payShortfall.toLocaleString() }}，请先充值</span>
+          <button class="btn-go-recharge" @click="goRecharge">去充值</button>
         </div>
       </div>
     </Modal>
@@ -243,6 +254,7 @@ import Toast from '../components/Toast.vue'
 import { logger } from '../utils/api'
 import { authState } from '../utils/auth'
 import { taskStore } from '../utils/taskStore'
+import { walletState, walletStore } from '../utils/walletStore'
 
 export default {
   name: 'Tasks',
@@ -299,6 +311,18 @@ export default {
     },
     isLoggedIn() {
       return authState.isLoggedIn
+    },
+    walletState() {
+      return walletState
+    },
+    payInsufficient() {
+      if (!this.selectedTask || this.selectedTask.amount == null) return false
+      return walletState.balance < Number(this.selectedTask.amount)
+    },
+    payShortfall() {
+      if (!this.selectedTask || this.selectedTask.amount == null) return 0
+      const diff = Math.round((Number(this.selectedTask.amount) - walletState.balance) * 100) / 100
+      return diff > 0 ? diff : 0
     }
   },
   mounted() {
@@ -376,24 +400,43 @@ export default {
     },
     async confirmPay() {
       if (!this.selectedTask) return
+      if (this.payLoading) return
+      // 余额不足直接拦截，不发起扣款，任务状态保持不变
+      if (walletState.balance < Number(this.selectedTask.amount || 0)) {
+        this.showNotification('error', '余额不足', `还差 ¥${this.payShortfall.toLocaleString()}，请先充值`)
+        return
+      }
       this.payLoading = true
-      
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      const updatedTask = taskStore.markAsPaid(this.selectedTask.id)
-      
+
+      const result = await walletStore.payForTask(this.selectedTask)
+
       this.payLoading = false
-      this.showPayModal = false
-      
-      if (updatedTask) {
+
+      if (result.success) {
+        this.showPayModal = false
         this.refreshTasks()
         this.successTitle = '支付成功'
-        this.successMessage = '您的订单已支付成功'
+        this.successMessage = `已通过钱包扣款 ¥${this.selectedTask.amount.toLocaleString()}，余额 ¥${result.balanceAfter.toLocaleString()}`
         this.showSuccessModal = true
         logger.info('Payment successful', { taskId: this.selectedTask.id, amount: this.selectedTask.amount })
+      } else if (result.code === 'AUTH_EXPIRED') {
+        // 登录失效：保留弹窗上下文，不改动金额与任务
+        this.showPayModal = false
+        this.showNotification('error', '登录失效', result.message)
       } else {
-        this.showNotification('error', '支付失败', '请稍后重试')
+        // 余额不足 / 重复提交 / 已支付等：资金与任务均无变化
+        this.showNotification(
+          result.code === 'INSUFFICIENT_BALANCE' ? 'error' : 'info',
+          result.code === 'INSUFFICIENT_BALANCE' ? '余额不足' : '无法支付',
+          result.message || '请稍后重试'
+        )
+        // 任务可能在其他页签已被支付，刷新本地视图
+        this.refreshTasks()
       }
+    },
+    goRecharge() {
+      this.showPayModal = false
+      this.$router.push({ path: '/profile', query: { action: 'recharge' } })
     },
     async confirmCancel() {
       if (!this.selectedTask) return
@@ -838,6 +881,48 @@ export default {
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--primary);
+}
+
+.pay-wallet {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.9rem;
+}
+
+.wallet-balance {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wallet-balance.insufficient {
+  color: #ff6b6b;
+}
+
+.pay-tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.25);
+  border-radius: 10px;
+  color: #ff6b6b;
+  font-size: 0.8rem;
+}
+
+.btn-go-recharge {
+  flex-shrink: 0;
+  background: var(--gradient-1);
+  border: none;
+  color: var(--bg-dark);
+  padding: 0.4rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .detail-content {
