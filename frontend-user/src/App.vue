@@ -43,7 +43,7 @@
  * 应用根组件
  * 负责整合全局布局组件和管理登录状态
  */
-import { authState } from './utils/auth'
+import { authState, notifyUnauthorized } from './utils/auth'
 import NavBar from './components/NavBar.vue'
 import FooterBar from './components/FooterBar.vue'
 import LoginModal from './components/LoginModal.vue'
@@ -57,7 +57,8 @@ export default {
   },
   data() {
     return {
-      showLoginModal: false // 登录弹窗显示状态
+      showLoginModal: false, // 登录弹窗显示状态
+      unauthorizedHandler: null
     }
   },
   computed: {
@@ -75,6 +76,17 @@ export default {
     userName() {
       return authState.user?.name || 'U'
     }
+  },
+  mounted() {
+    this.unauthorizedHandler = (event) => {
+      const message = event.detail?.message || '登录已失效，请重新登录'
+      notifyUnauthorized(message)
+      this.showLoginModal = true
+    }
+    window.addEventListener('billiard:unauthorized', this.unauthorizedHandler)
+  },
+  beforeUnmount() {
+    window.removeEventListener('billiard:unauthorized', this.unauthorizedHandler)
   },
   methods: {
     /**

@@ -138,6 +138,11 @@ async function request(url, options = {}) {
     // 检查HTTP状态码
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
+      if (response.status === 401) {
+        window.dispatchEvent(new CustomEvent('billiard:unauthorized', {
+          detail: { message: errorData.error || '登录已失效，请重新登录' }
+        }))
+      }
       throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
     }
     
@@ -311,6 +316,9 @@ const mockData = {
     name: '张三',
     level: '黄金',
     points: 2580,
+    balance: 368,
+    couponCount: 3,
+    couponValue: 90,
     totalHours: 156,
     competitions: 12,
     wins: 8,

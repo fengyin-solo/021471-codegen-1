@@ -30,6 +30,47 @@ const AUTH_TOKEN_KEY = 'billiard_token'
 /** localStorage中存储用户信息的键名 */
 const AUTH_USER_KEY = 'billiard_user'
 
+const unauthorizedListeners = new Set()
+
+/**
+ * 登录失效时通知页面中断当前操作。
+ */
+export function onUnauthorized(listener) {
+  unauthorizedListeners.add(listener)
+  return () => unauthorizedListeners.delete(listener)
+}
+
+export function notifyUnauthorized(message = '登录已失效，请重新登录') {
+  clearAuth()
+  unauthorizedListeners.forEach(listener => {
+    try {
+      listener(message)
+    } catch (error) {
+      logger.error('Unauthorized listener error', error)
+    }
+  })
+}
+
+/**
+ * 将钱包资产同步到用户信息，保证页面各卡片读取同一份数值。
+ */
+export function syncUserAssets(assets = {}) {
+  if (!authState.user) return
+
+  const balance = Number(assets.balance)
+  const points = Number(assets.points)
+  if (Number.isFinite(balance)) authState.user.balance = Math.max(0, Math.round(balance * 100) / 100)
+  if (Number.isSafeInteger(points)) authState.user.points = Math.max(0, points)
+  if (Number.isSafeInteger(assets.couponCount)) authState.user.couponCount = Math.max(0, assets.couponCount)
+  if (Number.isFinite(assets.couponValue)) authState.user.couponValue = Math.max(0, assets.couponValue)
+
+  try {
+    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(authState.user))
+  } catch (error) {
+    logger.error('Failed to sync user assets', error)
+  }
+}
+
 // ==================== 响应式状态 ====================
 
 /**

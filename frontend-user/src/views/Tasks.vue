@@ -234,19 +234,23 @@
       :title="toastTitle"
       :message="toastMessage"
     />
+
+    <LoginModal v-model="showLoginModal" @success="onLoginSuccess" />
   </div>
 </template>
 
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
+import LoginModal from '../components/LoginModal.vue'
 import { logger } from '../utils/api'
-import { authState } from '../utils/auth'
+import { authState, isAuthenticated, notifyUnauthorized } from '../utils/auth'
 import { taskStore } from '../utils/taskStore'
+import { walletStore, PAYMENT_RESULT } from '../utils/walletStore'
 
 export default {
   name: 'Tasks',
-  components: { Modal, Toast },
+  components: { Modal, Toast, LoginModal },
   data() {
     return {
       activeTab: 'pending',
@@ -264,6 +268,8 @@ export default {
       toastType: 'success',
       toastTitle: '',
       toastMessage: '',
+      showLoginModal: false,
+      payRequestKey: '',
       refreshKey: 0
     }
   },
@@ -301,13 +307,34 @@ export default {
       return authState.isLoggedIn
     }
   },
-  mounted() {
+  async mounted() {
+    await this.recoverHeldPayments()
     this.refreshTasks()
   },
-  activated() {
+  async activated() {
+    await this.recoverHeldPayments()
     this.refreshTasks()
+  },
+  watch: {
+    isLoggedIn(loggedIn) {
+      if (loggedIn) this.recoverHeldPayments().then(() => this.refreshTasks())
+    }
   },
   methods: {
+    async recoverHeldPayments() {
+      if (!isAuthenticated()) return
+      try {
+        await walletStore.recoverTaskPayments({
+          getTask: (transaction) => taskStore.getById(transaction.taskId),
+          markPaid: (transaction) => taskStore.markTaskPaid(transaction.taskId)
+        })
+      } catch (error) {
+        logger.error('Recover held payment failed', error)
+      }
+    },
+    onLoginSuccess() {
+      this.showLoginModal = false
+    },
     refreshTasks() {
       this.refreshKey++
     },
@@ -376,23 +403,60 @@ export default {
     },
     async confirmPay() {
       if (!this.selectedTask) return
-      this.payLoading = true
-      
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      const updatedTask = taskStore.markAsPaid(this.selectedTask.id)
-      
-      this.payLoading = false
-      this.showPayModal = false
-      
-      if (updatedTask) {
+      if (!isAuthenticated()) {
+        this.showPayModal = false
+        notifyUnauthorized()
+        this.showLoginModal = true
+        return
+      }
+
+      const latestTask = taskStore.getById(this.selectedTask.id)
+      if (!latestTask || latestTask.status !== 'pending_payment') {
+        this.showPayModal = false
         this.refreshTasks()
-        this.successTitle = '支付成功'
-        this.successMessage = '您的订单已支付成功'
-        this.showSuccessModal = true
-        logger.info('Payment successful', { taskId: this.selectedTask.id, amount: this.selectedTask.amount })
-      } else {
-        this.showNotification('error', '支付失败', '请稍后重试')
+        this.showNotification('info', '无需重复支付', '该任务已处理或已取消')
+        return
+      }
+
+      this.payRequestKey = `task-pay-${latestTask.id}-${latestTask.status}`
+      this.payLoading = true
+
+      try {
+        const result = await walletStore.payForTask(latestTask, {
+          idempotencyKey: this.payRequestKey,
+          commit: () => taskStore.markTaskPaid(latestTask.id)
+        })
+
+        if (result.ok) {
+          this.showPayModal = false
+          this.refreshTasks()
+          if (result.alreadyPaid) {
+            this.showNotification('info', '该任务已支付', '任务状态已同步，无需重复扣款')
+          } else {
+            this.successTitle = '支付成功'
+            this.successMessage = '钱包扣款与任务状态已同步'
+            this.showSuccessModal = true
+            logger.info('Wallet payment successful', { taskId: latestTask.id, amount: latestTask.amount })
+          }
+          return
+        }
+
+        if (result.code === PAYMENT_RESULT.NOT_AUTHENTICATED) {
+          this.showPayModal = false
+          this.showLoginModal = true
+        } else if (result.code === PAYMENT_RESULT.DUPLICATE_SUBMISSION) {
+          this.showNotification('warning', '请勿重复提交', result.message)
+        } else if (result.code === PAYMENT_RESULT.INSUFFICIENT_BALANCE) {
+          this.showNotification('error', '余额不足', `可用余额 ¥${result.balance ?? 0}，请充值后再支付`)
+        } else if (result.code === PAYMENT_RESULT.CORRUPTED_LEDGER) {
+          this.showNotification('error', '明细损坏', result.message || '钱包明细存在异常，请先在个人中心修复')
+        } else if (result.code === PAYMENT_RESULT.COMMIT_FAILED) {
+          this.showNotification('warning', '任务状态待恢复', result.message || '款项已锁定，返回页面时会自动核对')
+        } else {
+          this.showNotification('error', '支付失败', result.message || '请稍后重试')
+        }
+      } finally {
+        this.payLoading = false
       }
     },
     async confirmCancel() {

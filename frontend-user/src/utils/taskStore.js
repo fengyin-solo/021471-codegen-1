@@ -106,12 +106,49 @@ const statusConfig = {
   cancelled: { text: '已取消', type: 'success' }
 }
 
+function isValidTask(task) {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) return false
+  if (typeof task.id !== 'string' || !task.id.trim()) return false
+  if (!taskTypeConfig[task.type]) return false
+  if (!statusConfig[task.status]) return false
+  if (typeof task.title !== 'string' || !task.title.trim()) return false
+  if (!Number.isFinite(task.amount) || task.amount < 0) return false
+  if (typeof task.createdAt !== 'string' || Number.isNaN(new Date(task.createdAt).getTime())) return false
+  return true
+}
+
+function backupCorruptedTasks(raw, reason) {
+  try {
+    const backupKey = `${STORAGE_KEY}_corrupt_${Date.now()}`
+    localStorage.setItem(backupKey, raw)
+    logger.warn('损坏任务明细已隔离备份', { backupKey, reason })
+  } catch (error) {
+    logger.error('损坏任务备份失败', error)
+  }
+}
+
 function loadTasks() {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    return stored ? JSON.parse(stored) : getDefaultTasks()
+    if (!stored) return getDefaultTasks()
+
+    const parsed = JSON.parse(stored)
+    if (!Array.isArray(parsed)) {
+      backupCorruptedTasks(stored, '任务数据不是数组')
+      return getDefaultTasks()
+    }
+
+    const validTasks = parsed.filter(isValidTask)
+    if (validTasks.length !== parsed.length) {
+      backupCorruptedTasks(stored, `保留${validTasks.length}条，剔除${parsed.length - validTasks.length}条`)
+    }
+    return validTasks
   } catch (e) {
     logger.error('加载任务失败', e)
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) backupCorruptedTasks(stored, '任务JSON解析失败')
+    } catch (_) { /* 备份失败不影响默认数据加载 */ }
     return getDefaultTasks()
   }
 }
@@ -335,10 +372,10 @@ export const taskStore = {
   markAsPaid(taskId) {
     const task = this.getById(taskId)
     if (!task) return null
-    
+
     let newStatus = 'upcoming'
     let newSubtitle = '支付成功'
-    
+
     if (task.type === 'order') {
       newStatus = 'pending_shipment'
       newSubtitle = '支付成功，待发货'
@@ -347,8 +384,20 @@ export const taskStore = {
     } else if (task.type === 'booking') {
       newSubtitle = '支付成功，等待使用'
     }
-    
+
     return this.update(taskId, { status: newStatus, subtitle: newSubtitle })
+  },
+
+  /**
+   * 钱包支付成功后只推进任务状态，不改写任务原有业务字段。
+   * 已是支付后状态时保持幂等。
+   */
+  markTaskPaid(taskId) {
+    const task = this.getById(taskId)
+    if (!task) return null
+    if (task.status !== 'pending_payment') return task
+    const nextStatus = task.type === 'order' ? 'pending_shipment' : 'upcoming'
+    return this.updateStatus(taskId, nextStatus)
   },
 
   getPendingCount() {
